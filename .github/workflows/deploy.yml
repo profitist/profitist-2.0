@@ -4,54 +4,36 @@ on:
   push:
     branches: [master]
 
-env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/profitist
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
       packages: write
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
-        uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ env.IMAGE }}:latest,${{ env.IMAGE }}:${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.IMAGE }}:latest
-          cache-to: type=inline
+          tags: ghcr.io/${{ github.repository_owner }}/profitist:latest
 
-      - name: Setup SSH
+      - name: Restart on server
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
-
-      - name: Copy docker-compose.yml
-        run: |
-          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "mkdir -p ~/profitist"
-          scp -i ~/.ssh/deploy_key docker-compose.yml ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/profitist/docker-compose.yml
-
-      - name: Deploy
-        run: |
-          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
-            set -e
-            echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
-            cd ~/profitist
-            docker compose pull
-            docker compose up -d --remove-orphans
-            docker image prune -f
-          "
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
+              cd ~/profitist
+              echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+              docker compose pull
+              docker compose up -d
+            "
