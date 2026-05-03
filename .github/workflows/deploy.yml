@@ -38,48 +38,20 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Deploy to server
-        env:
-          HOST: ${{ secrets.SSH_HOST }}
-          USER: ${{ secrets.SSH_USER }}
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ACTOR: ${{ github.actor }}
+      - name: Copy docker-compose.yml
         run: |
-          ssh -i ~/.ssh/deploy_key $USER@$HOST bash << 'ENDSSH'
-            mkdir -p ~/profitist
-            cat > ~/profitist/docker-compose.yml << 'EOF'
-          services:
-            db:
-              image: postgres:17-alpine
-              restart: unless-stopped
-              environment:
-                POSTGRES_DB: profitist
-                POSTGRES_USER: profitist
-                POSTGRES_PASSWORD: profitist
-              volumes:
-                - pgdata:/var/lib/postgresql/data
-              healthcheck:
-                test: ["CMD-SHELL", "pg_isready -U profitist"]
-                interval: 5s
-                retries: 5
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "mkdir -p ~/profitist"
+          scp -i ~/.ssh/deploy_key docker-compose.yml ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/profitist/docker-compose.yml
 
-            bot:
-              image: ghcr.io/ivanmihajlov/profitist:latest
-              restart: unless-stopped
-              env_file: .env
-              depends_on:
-                db:
-                  condition: service_healthy
-
-          volumes:
-            pgdata:
-          EOF
-          ENDSSH
-          ssh -i ~/.ssh/deploy_key $USER@$HOST \
-            "echo '$TOKEN' | docker login ghcr.io -u $ACTOR --password-stdin && \
-             cd ~/profitist && \
-             docker compose pull && \
-             docker compose up -d --remove-orphans && \
-             docker image prune -f"
+      - name: Deploy
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
+            set -e
+            echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+            cd ~/profitist
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker image prune -f
+          "
