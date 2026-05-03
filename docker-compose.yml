@@ -14,7 +14,7 @@ services:
       retries: 5
 
   bot:
-    image: ghcr.io/ivanmihajlov/profitist:latest
+    image: profitist:latest
     restart: unless-stopped
     env_file: .env
     depends_on:
