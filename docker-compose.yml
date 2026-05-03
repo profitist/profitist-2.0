@@ -14,7 +14,7 @@ services:
       retries: 5
 
   bot:
-    image: profitist:latest
+    build: .
     restart: unless-stopped
     env_file: .env
     depends_on:

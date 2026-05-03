@@ -8,11 +8,25 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/key
           chmod 600 ~/.ssh/key
+
+      - name: Copy code to server
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/key -o StrictHostKeyChecking=no" \
+            --exclude='.git' \
+            --exclude='.env' \
+            --exclude='__pycache__' \
+            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/profitist/
+
+      - name: Restart bot
+        run: |
           ssh -i ~/.ssh/key -o StrictHostKeyChecking=no \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "cd ~/profitist && git pull && docker compose up -d --build"
+            "cd ~/profitist && docker compose up -d --build 2>&1"
