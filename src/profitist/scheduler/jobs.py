@@ -8,6 +8,7 @@ from profitist.config import settings
 from profitist.db.base import AsyncSessionLocal
 from profitist.memory import store
 from profitist.search.tavily import search as tavily_search
+from profitist.memory.store import get_pending_tasks, update_task_status
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,36 @@ async def _send_message(text: str) -> None:
     await _bot.send_message(_chat_id, text)
 
 
+# --- Recovery at startup ---
+
+
+async def recover_pending_tasks(scheduler) -> None:
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as session:
+        tasks = await get_pending_tasks(session)
+        recovered = 0
+        missed = 0
+        for task in tasks:
+            if task.scheduled_at is None:
+                continue
+            scheduled_utc = task.scheduled_at.replace(tzinfo=timezone.utc)
+            if scheduled_utc <= now:
+                await update_task_status(session, task.id, "failed", result="missed (bot was down)")
+                missed += 1
+            else:
+                scheduler.add_job(
+                    execute_task,
+                    "date",
+                    run_date=scheduled_utc,
+                    args=[task.id],
+                    id=task.apscheduler_job_id,
+                    replace_existing=True,
+                )
+                recovered += 1
+    if recovered or missed:
+        logger.info("Recovery: %d tasks re-scheduled, %d marked missed", recovered, missed)
+
+
 # --- Task execution ---
 
 
@@ -52,7 +83,8 @@ async def execute_task(task_id: int) -> None:
 
         try:
             if task.task_type == "reminder":
-                await _send_message(f"🔔 Напоминание: {task.description}")
+                text = await _generate_reminder_text(task.description)
+                await _send_message(text)
                 await store.update_task_status(session, task_id, "done")
 
             elif task.task_type == "research":
@@ -67,6 +99,30 @@ async def execute_task(task_id: int) -> None:
         except Exception:
             logger.exception("Failed to execute task %d", task_id)
             await store.update_task_status(session, task_id, "failed")
+
+
+async def _generate_reminder_text(description: str) -> str:
+    try:
+        response = await _client.chat.completions.create(
+            model=settings.main_model,
+            max_tokens=300,
+            temperature=0.9,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты дружелюбный ассистент. Тебе дали тему напоминания. "
+                        "Сформулируй её живо и кратко (1–2 предложения), без шаблонных фраз вроде «Напоминание:». "
+                        "Можешь добавить уместное эмодзи. Не выдумывай детали — только перефразируй."
+                    ),
+                },
+                {"role": "user", "content": f"Тема напоминания: {description}"},
+            ],
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        logger.exception("Failed to generate reminder text, using fallback")
+        return f"🔔 {description}"
 
 
 async def _do_research(description: str) -> str:
@@ -104,6 +160,7 @@ async def proactive_daily_check() -> None:
         response = await _client.chat.completions.create(
             model=settings.main_model,
             max_tokens=1024,
+            temperature=0.9,
             messages=[
                 {
                     "role": "system",
@@ -111,7 +168,7 @@ async def proactive_daily_check() -> None:
                         "Ты — проактивный персональный ассистент. Тебе известны факты о пользователе. "
                         "Определи, есть ли что-то ценное, чем стоит поделиться сегодня — полезный инсайт, "
                         "напоминание о цели, актуальная мысль. Если нет — ответь пустой строкой. "
-                        "Если да — напиши короткое дружелюбное сообщение."
+                        "Если да — напиши короткое дружелюбное сообщение. Варьируй стиль и формулировки."
                     ),
                 },
                 {
@@ -152,6 +209,7 @@ async def summarize_old_conversations() -> None:
         response = await _client.chat.completions.create(
             model=settings.fast_model,
             max_tokens=512,
+            temperature=0.2,
             messages=[
                 {
                     "role": "system",
@@ -183,6 +241,7 @@ async def summarize_old_conversations() -> None:
         facts_response = await _client.chat.completions.create(
             model=settings.fast_model,
             max_tokens=512,
+            temperature=0.2,
             messages=[
                 {
                     "role": "system",

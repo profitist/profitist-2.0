@@ -46,6 +46,8 @@ async def run_agent_loop(
         response = await _client.chat.completions.create(
             model=model,
             max_tokens=4096,
+            temperature=0.9,
+            top_p=0.95,
             messages=messages,
             tools=TOOL_DEFINITIONS,
         )

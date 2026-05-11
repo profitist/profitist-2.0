@@ -19,6 +19,7 @@ class Settings(BaseSettings):
 
     main_model: str = "gpt-4o"
     fast_model: str = "gpt-4o-mini"
+    user_timezone: str = "Asia/Yekaterinburg"
 
     max_working_memory_turns: int = 8
     proactive_check_hour: int = 9

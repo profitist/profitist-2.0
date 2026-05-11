@@ -3,12 +3,13 @@ import logging
 
 from aiogram import Bot, Dispatcher
 
-from profitist.bot.middleware import AuthMiddleware, DbSessionMiddleware
+from profitist.bot.middleware import AuthMiddleware, DbSessionMiddleware, SchedulerMiddleware
 from profitist.bot.router import router
 from profitist.config import settings
 from profitist.scheduler.engine import scheduler
 from profitist.scheduler.jobs import (
     proactive_daily_check,
+    recover_pending_tasks,
     set_bot_instance,
     summarize_old_conversations,
 )
@@ -24,13 +25,15 @@ async def _run() -> None:
     bot = Bot(token=settings.telegram_bot_token)
     dp = Dispatcher()
 
-    # Middleware (порядок важен: auth → db session)
+    # Middleware (порядок важен: auth → db session → scheduler)
     router.message.middleware(AuthMiddleware())
     router.message.middleware(DbSessionMiddleware())
+    router.message.middleware(SchedulerMiddleware(scheduler))
     dp.include_router(router)
 
     # Scheduler
     set_bot_instance(bot, settings.telegram_chat_id)
+    await recover_pending_tasks(scheduler)
     scheduler.add_job(
         proactive_daily_check,
         "cron",

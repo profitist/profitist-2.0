@@ -13,7 +13,7 @@ router = Router(name="main")
 
 
 @router.message()
-async def handle_message(message: Message, db: AsyncSession, scheduler=None) -> None:
+async def handle_message(message: Message, db: AsyncSession, scheduler) -> None:
     if not message.text:
         return
 

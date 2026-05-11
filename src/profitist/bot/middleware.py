@@ -37,3 +37,19 @@ class DbSessionMiddleware(BaseMiddleware):
         async with AsyncSessionLocal() as session:
             data["db"] = session
             return await handler(event, data)
+
+
+class SchedulerMiddleware(BaseMiddleware):
+    """Инжектирует APScheduler в handler через data['scheduler']."""
+
+    def __init__(self, scheduler) -> None:
+        self.scheduler = scheduler
+
+    async def __call__(
+        self,
+        handler: Callable[[Message, dict[str, Any]], Awaitable[Any]],
+        event: Message,
+        data: dict[str, Any],
+    ) -> Any:
+        data["scheduler"] = self.scheduler
+        return await handler(event, data)

@@ -1,18 +1,26 @@
 import json
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
+from profitist.config import settings
 from profitist.memory.store import ContextBundle
 
 SYSTEM_PREFIX = """\
 Ты — персональный ИИ-ассистент пользователя. Ты помнишь факты о нём, ведёшь долгосрочный контекст и можешь действовать проактивно.
 
+Стиль:
+- Пиши живо и по-человечески. Варьируй формулировки — не используй одни и те же фразы-зачины («Хорошо», «Конечно») в каждом ответе.
+- Отвечай на языке пользователя. По умолчанию — русский.
+- Длина ответа — по ситуации: короткий вопрос → короткий ответ, содержательная просьба → развернутый ответ.
+
+Инструменты:
+- Пользователь сообщает факт о себе → save_user_fact.
+- Просьба напомнить / запланировать → schedule_reminder с точным ISO 8601 (с offset, например 2026-05-11T18:00:00+05:00).
+- Исследование темы → schedule_research (если нужно позже) или web_search (если нужно сейчас).
+
 Правила:
-- Отвечай на русском, если пользователь пишет на русском. Переключайся на язык пользователя.
-- Если пользователь сообщает факт о себе — вызови save_user_fact.
-- Если просит напомнить — вызови schedule_reminder с точной датой/временем.
-- Если просит исследовать тему — вызови schedule_research (если нужно позже) или web_search (если нужно сейчас).
-- Не придумывай факты о пользователе. Используй только то, что знаешь из контекста.
-- Будь кратким и по делу, но дружелюбным."""
+- Не выдумывай факты о пользователе. Только то, что в контексте.
+- Все времена интерпретируй в таймзоне пользователя (указана ниже). При создании напоминания ВСЕГДА передавай scheduled_at с UTC-offset."""
 
 
 def build_system_prompt(context: ContextBundle) -> str:
@@ -29,8 +37,15 @@ def build_system_prompt(context: ContextBundle) -> str:
             period = f"{ep.period_start:%Y-%m-%d} — {ep.period_end:%Y-%m-%d}"
             lines.append(f"[{period}] {ep.summary}")
 
-    now = datetime.now(timezone.utc)
-    lines.append(f"\nСегодня: {now:%Y-%m-%d %H:%M} UTC")
+    tz = ZoneInfo(settings.user_timezone)
+    now = datetime.now(timezone.utc).astimezone(tz)
+    offset_hours = int(now.utcoffset().total_seconds() // 3600)
+    offset_str = f"UTC+{offset_hours}" if offset_hours >= 0 else f"UTC{offset_hours}"
+    lines.append(
+        f"\nТаймзона пользователя: {settings.user_timezone} ({offset_str}). "
+        f"Сейчас: {now:%Y-%m-%d %H:%M}. "
+        f"При schedule_reminder передавай offset, например {now:%Y-%m-%dT%H:%M:%S}{now:%z}."
+    )
 
     return "\n".join(lines)
 

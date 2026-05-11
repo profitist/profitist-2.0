@@ -8,8 +8,8 @@ _client = openai.AsyncOpenAI(
 )
 
 INTENT_MODEL_MAP = {
-    "memory": settings.fast_model,
-    "schedule": settings.fast_model,
+    "memory": settings.main_model,
+    "schedule": settings.main_model,
     "chat": settings.main_model,
     "research": settings.main_model,
 }
@@ -29,6 +29,7 @@ async def classify_intent(message: str) -> str:
     response = await _client.chat.completions.create(
         model=settings.fast_model,
         max_tokens=10,
+        temperature=0,
         messages=[
             {"role": "system", "content": _CLASSIFY_PROMPT},
             {"role": "user", "content": message},

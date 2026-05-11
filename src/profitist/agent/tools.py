@@ -1,8 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from profitist.config import settings
 from profitist.memory import store
 from profitist.search.tavily import search as tavily_search
 
@@ -101,6 +103,14 @@ TOOL_DEFINITIONS = [
 ]
 
 
+def _parse_scheduled_at(value: str) -> datetime:
+    """Parse ISO 8601 datetime; treat naive as user's local timezone."""
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo(settings.user_timezone))
+    return dt
+
+
 async def execute_tool(
     name: str,
     input_data: dict,
@@ -126,35 +136,38 @@ async def execute_tool(
             return "\n".join(lines)
 
         case "schedule_reminder":
-            scheduled_at = datetime.fromisoformat(input_data["scheduled_at"])
-            if scheduled_at.tzinfo is not None:
-                scheduled_at = scheduled_at.astimezone(timezone.utc).replace(tzinfo=None)
+            if scheduler is None:
+                raise RuntimeError("Scheduler not injected — SchedulerMiddleware misconfigured")
+            scheduled_at = _parse_scheduled_at(input_data["scheduled_at"])
+            now_utc = datetime.now(timezone.utc)
+            if scheduled_at <= now_utc + timedelta(seconds=5):
+                local = scheduled_at.astimezone(ZoneInfo(settings.user_timezone))
+                return f"Ошибка: время {local:%Y-%m-%d %H:%M} уже прошло или слишком близко. Уточни время у пользователя."
             job_id = f"reminder_{uuid4().hex[:8]}"
             task = await store.create_task(
                 session,
                 task_type="reminder",
                 description=input_data["description"],
-                scheduled_at=scheduled_at,
+                scheduled_at=scheduled_at.astimezone(timezone.utc).replace(tzinfo=None),
                 apscheduler_job_id=job_id,
             )
-            if scheduler:
-                from profitist.scheduler.jobs import execute_task
-
-                scheduler.add_job(
-                    execute_task,
-                    "date",
-                    run_date=scheduled_at,
-                    args=[task.id],
-                    id=job_id,
-                )
-            return f"Напоминание запланировано на {scheduled_at.isoformat()}"
+            from profitist.scheduler.jobs import execute_task
+            scheduler.add_job(
+                execute_task,
+                "date",
+                run_date=scheduled_at,
+                args=[task.id],
+                id=job_id,
+            )
+            local_at = scheduled_at.astimezone(ZoneInfo(settings.user_timezone))
+            return f"Напоминание запланировано на {local_at:%Y-%m-%d %H:%M} ({settings.user_timezone})"
 
         case "schedule_research":
+            if scheduler is None:
+                raise RuntimeError("Scheduler not injected — SchedulerMiddleware misconfigured")
             scheduled_at_str = input_data.get("scheduled_at")
             if scheduled_at_str:
-                scheduled_at = datetime.fromisoformat(scheduled_at_str)
-                if scheduled_at.tzinfo is not None:
-                    scheduled_at = scheduled_at.astimezone(timezone.utc).replace(tzinfo=None)
+                scheduled_at = _parse_scheduled_at(scheduled_at_str)
             else:
                 scheduled_at = None
             job_id = f"research_{uuid4().hex[:8]}"
@@ -162,20 +175,18 @@ async def execute_tool(
                 session,
                 task_type="research",
                 description=input_data["description"],
-                scheduled_at=scheduled_at,
+                scheduled_at=scheduled_at.astimezone(timezone.utc).replace(tzinfo=None) if scheduled_at else None,
                 apscheduler_job_id=job_id,
             )
-            if scheduler:
-                from profitist.scheduler.jobs import execute_task
-
-                run_date = scheduled_at or datetime.now(timezone.utc)
-                scheduler.add_job(
-                    execute_task,
-                    "date",
-                    run_date=run_date,
-                    args=[task.id],
-                    id=job_id,
-                )
+            from profitist.scheduler.jobs import execute_task
+            run_date = scheduled_at or datetime.now(timezone.utc)
+            scheduler.add_job(
+                execute_task,
+                "date",
+                run_date=run_date,
+                args=[task.id],
+                id=job_id,
+            )
             return f"Задача на исследование создана (id={task.id})"
 
         case "web_search":
